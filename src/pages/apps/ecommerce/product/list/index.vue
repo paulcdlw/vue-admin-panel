@@ -1,13 +1,15 @@
 <script setup>
 import { getProducts } from '@/utils/api'
+import { debounce } from 'lodash'
 const headers = [
   {
-    title: 'Product',
+    title: 'Name',
     key: 'name',
   },
   {
     title: 'Short Description',
     key: 'shortDescription',
+    sortable: false,
   },
   {
     title: 'Category',
@@ -16,6 +18,7 @@ const headers = [
   {
     title: 'Quantity',
     key: 'quantity',
+    align: 'center',
   },
 ]
 
@@ -60,6 +63,7 @@ const sortBy = ref()
 const orderBy = ref()
 
 const updateOptions = options => {
+  console.log('Options:', options)
   page.value = options.page
   sortBy.value = options.sortBy[0]?.key
   orderBy.value = options.sortBy[0]?.order
@@ -86,7 +90,6 @@ const resolveStatus = statusMsg => {
 
 const fetchProducts = async () => {
   try {
-    // Llama a getProducts con los parámetros requeridos
     const response = await getProducts({
       q: searchQuery.value,
       stock: selectedStock.value,
@@ -97,14 +100,8 @@ const fetchProducts = async () => {
       sortBy: sortBy.value,
       orderBy: orderBy.value,
     })
-    // Verifica y asigna la respuesta
     productsData.value = response
-    console.log('Fetching with filters:', {
-      q: searchQuery.value,
-      stock: selectedStock.value,
-      category: selectedCategory.value,
-      status: selectedStatus.value,
-    })
+    console.log('Products fetched:', response);
   } catch (error) {
     console.error('Error fetching products:', error)
   }
@@ -112,12 +109,11 @@ const fetchProducts = async () => {
 
 const fetchCategories = async () => {
   try {
-    const response = await getCategories()
+    const response = await getAllCategories()
     categories.value = response.map(category => ({
       title: category.name,
       value: category.id,
     }))
-    console.log(categories.value)
   } catch (error) {
     console.error('Error fetching categories:', error)
   }
@@ -138,7 +134,10 @@ const getCategoryName = (categoryIds) => {
   }).join(', ')
 }
 
-const totalProduct = computed(() => productsData.value.length)
+const products = computed(() => productsData.value.data)
+const totalProduct = computed(() => {
+  return productsData.value.total || 0;
+});
 
 const deleteProduct = async id => {
   await $api(`apps/ecommerce/products/${id}`, { method: 'DELETE' })
@@ -147,25 +146,38 @@ const deleteProduct = async id => {
   const index = selectedRows.value.findIndex(row => row === id)
   if (index !== -1)
     selectedRows.value.splice(index, 1)
-
-
 }
 
 const truncateDescription = (description) => {
-  if (description.length > 50) {
-    return description.substring(0, 50) + '...'
-  }
-  return description
-}
+  const words = description.split(' ');
+  let result = '';
+  let lineLength = 0;
 
-watch([selectedStatus, selectedCategory, selectedStock, searchQuery], () => {
+  words.forEach((word) => {
+    if (lineLength + word.length > 50) {
+      result += '<br>';
+      lineLength = 0;
+    }
+    result += word + ' ';
+    lineLength += word.length + 1;
+  });
+
+  return result.trim();
+};
+
+const fetchProductsDebounced = debounce(fetchProducts, 300)
+
+
+watch([selectedStatus, selectedCategory, selectedStock, searchQuery, itemsPerPage, page, sortBy, orderBy], () => {
   console.log('Filters changed:', {
     selectedStatus: selectedStatus.value,
     selectedCategory: selectedCategory.value,
     selectedStock: selectedStock.value,
     searchQuery: searchQuery.value,
+    itemsPerPage: itemsPerPage.value,
+    page: page.value,
   })
-  fetchProducts()
+  fetchProductsDebounced()
 })
 
 onMounted(() => {
@@ -183,20 +195,14 @@ onMounted(() => {
       </VCardItem>
       <VCardText>
         <VRow>
-          <!-- 👉 Select Status -->
-          <VCol cols="12" sm="4">
-            <VSelect v-model="selectedStatus" label="Select Status" placeholder="Select Status" :items="status"
-              clearable clear-icon="ri-close-line" />
-          </VCol>
-
           <!-- 👉 Select Category -->
-          <VCol cols="12" sm="4">
+          <VCol cols="12" sm="6">
             <VSelect v-model="selectedCategory" label="Category" placeholder="Select Category" :items="categories"
               clearable clear-icon="ri-close-line" />
           </VCol>
 
           <!-- 👉 Select Stock Status -->
-          <VCol cols="12" sm="4">
+          <VCol cols="12" sm="6">
             <VSelect v-model="selectedStock" label="Stock" placeholder="Stock" :items="stockStatus" clearable
               clear-icon="ri-close-line" />
           </VCol>
@@ -208,7 +214,7 @@ onMounted(() => {
       <VCardText class="d-flex flex-wrap gap-4">
         <div class="d-flex align-center">
           <!-- 👉 Search  -->
-          <VTextField v-model="searchQuery" placeholder="Search Product" style="inline-size: 200px;" density="compact"
+          <VTextField v-model="searchQuery" placeholder="Search Product" style="inline-size: 400px;" density="compact"
             class="me-3" />
         </div>
 
@@ -228,7 +234,7 @@ onMounted(() => {
 
       <!-- 👉 Datatable  -->
       <VDataTableServer v-model:model-value="selectedRows" v-model:items-per-page="itemsPerPage" v-model:page="page"
-        :headers="headers" show-select :items="productsData" :items-length="totalProduct" class="text-no-wrap rounded-0"
+        :headers="headers" show-select :items="products" :items-length="totalProduct" class="text-no-wrap rounded-0"
         @update:options="updateOptions">
         <!-- product  -->
         <template #item.name="{ item }">
@@ -236,14 +242,15 @@ onMounted(() => {
             <VAvatar v-if="item.image" size="38" variant="tonal" rounded :image="item.image" />
             <div class="d-flex flex-column">
               <span class="text-base text-high-emphasis font-weight-medium">{{ item.name }}</span>
-              <span class="text-sm text-medium-emphasis">{{ item.price }}</span>
+              <span class="text-sm text-medium-emphasis">{{ item.price }} €</span>
             </div>
           </div>
         </template>
 
         <!-- short description -->
         <template #item.shortDescription="{ item }">
-          <span class="text-base text-high-emphasis" v-html="truncateDescription(item.short_description)"></span>
+          <span style="max-width: 300px;" class="text-base text-high-emphasis"
+            v-html="truncateDescription(item.short_description)"></span>
         </template>
 
         <!-- category -->
